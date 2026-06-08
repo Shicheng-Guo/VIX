@@ -1,0 +1,76 @@
+name: Daily VIX Dashboard
+
+# Rebuilds the dashboard from fresh market data once per trading day and
+# publishes it to GitHub Pages.
+#
+# One-time setup (repo owner): Settings → Pages → Build and deployment →
+# Source = "GitHub Actions". After the first successful run the dashboard is
+# served at https://shicheng-guo.github.io/VIX/
+
+on:
+  schedule:
+    # 23:00 UTC on weekdays — a couple hours after the US market close, so the
+    # day's VIX settlement values are available. Cron is always UTC.
+    - cron: "0 23 * * 1-5"
+  workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
+
+# Least-privilege permissions needed to deploy to Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let the newest win.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Reuse the previous day's cached data so a transient Yahoo outage falls
+      # back to the last good prices instead of synthetic data.
+      - name: Restore market-data cache
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: vix-data-${{ github.run_id }}
+          restore-keys: |
+            vix-data-
+
+      - name: Build dashboard
+        run: python run.py --refresh
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p _site
+          cp output/dashboard.html _site/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
