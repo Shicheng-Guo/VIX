@@ -285,6 +285,90 @@ def _strategy_legend(strategies) -> str:
     return f'<ul class="legend">{items}</ul>'
 
 
+def _signal_guide(snap: dict) -> str:
+    """One self-contained block: every signal explained + how to act on it,
+    annotated with the *current* reading so it doubles as today's interpretation.
+    """
+    vix = snap.get("VIX", "—")
+    ratio = snap.get("ts_ratio", "—")
+    struct = snap.get("structure", "—")
+    roll = snap.get("roll_yield_ann_%", "—")
+    vrp = snap.get("VRP", "—")
+    pct = snap.get("vix_1y_pctile", "—")
+    regime = snap.get("regime", "—")
+    trend = "RISK-ON (above 200d MA)" if snap.get("spx_above_200dma") else "RISK-OFF (below 200d MA)"
+
+    # Signal -> meaning -> action -> current reading
+    rows = [
+        ("VIX level",
+         "30-day implied volatility of the S&P 500 — the market's expected swing. High = fear, low = calm.",
+         "Low VIX favours selling vol (carry); spikes are usually faded as VIX mean-reverts.",
+         f"{vix}  ({pct}th percentile of the last year)"),
+        ("Term structure (VIX / VIX3M)",
+         "Slope of the vol curve. Ratio &lt;1 = <b>contango</b> (calm, curve upward); &ge;1 = <b>backwardation</b> (stress, curve inverted).",
+         "Contango pays short-vol holders a roll yield → sell vol. Backwardation pays long-vol holders → buy vol or go to cash.",
+         f"{ratio} → <b>{struct}</b>"),
+        ("Roll yield (annualised)",
+         "The carry a short-vol position earns purely from the curve rolling down, if nothing else moves.",
+         "Positive & large → short-vol carry is attractive. Negative → the curve is paying you to be long vol / flat.",
+         f"{roll}% per year"),
+        ("Variance risk premium (VRP)",
+         "Implied vol (VIX) minus 20-day realised vol. The premium option sellers harvest for bearing risk.",
+         "Positive → implied is richer than realised → edge to selling vol. Negative → vol is cheap; don't short it.",
+         f"{vrp} vol points"),
+        ("VIX 1-year percentile",
+         "Where today's VIX ranks vs the last 12 months — a mean-reversion gauge.",
+         "Very high (&gt;80) → spikes tend to revert down (fade). Very low (&lt;20) → carry is thin and a spike is overdue.",
+         f"{pct}th percentile"),
+        ("SPX 200-day trend",
+         "Is the S&P 500 above its 200-day moving average — the broad risk-on/off filter.",
+         "Short-vol carry works best in uptrends; below the 200d MA, size down or stand aside.",
+         trend),
+    ]
+    body = ""
+    for name, meaning, action, now in rows:
+        body += f"""<tr>
+            <td class="g-name">{name}</td>
+            <td>{meaning}</td>
+            <td class="g-act">{action}</td>
+            <td class="g-now">{now}</td>
+        </tr>"""
+
+    # Regime playbook
+    playbook = [
+        ("CALM", GREEN, "Low VIX, steep contango", "Harvest carry — full short-vol (SVXY) position."),
+        ("NORMAL", ACCENT, "Ordinary contango", "Harvest carry at reduced (half) size."),
+        ("STRESS", AMBER, "Elevated VIX or flattening curve", "Preserve capital — move to cash, stop selling vol."),
+        ("CRISIS", RED, "Backwardation + high VIX", "Small tactical long-vol (VXX) for tail capture."),
+    ]
+    pb = ""
+    for name, color, cond, action in playbook:
+        here = " ◄ now" if name == regime else ""
+        pb += f"""<tr>
+            <td><span class="dot" style="background:{color}"></span><b style="color:{color}">{name}</b>{here}</td>
+            <td>{cond}</td>
+            <td>{action}</td>
+        </tr>"""
+
+    return f"""
+    <p class="g-intro">Every panel above is driven by the signals below. The first table explains
+    <b>what each signal means</b> and <b>how to act on it</b>, with today's reading in the last column.
+    The second table is the regime playbook the flagship strategy follows. The headline call is the
+    synthesis of all of them. <b>Today: VIX {vix}, {struct}, regime {regime}.</b></p>
+    <table class="guide">
+      <thead><tr><th>Signal</th><th>What it measures</th><th>Investment interpretation</th><th>Now</th></tr></thead>
+      <tbody>{body}</tbody>
+    </table>
+    <h3 class="g-sub">Regime playbook</h3>
+    <table class="guide">
+      <thead><tr><th>Regime</th><th>Condition</th><th>Suggested positioning</th></tr></thead>
+      <tbody>{pb}</tbody>
+    </table>
+    <p class="g-warn">⚠ Educational framework, <b>not investment advice.</b> Short-volatility carry
+    earns small gains most of the time but suffers rare, severe losses when the curve inverts
+    (e.g. SVXY −90% in a day, 5 Feb 2018). Size positions for that tail, not for the calm.</p>"""
+
+
 TEMPLATE = """<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -322,6 +406,18 @@ TEMPLATE = """<!DOCTYPE html>
   ul.legend {{ list-style:none; padding:0; font-size:13px; color:var(--text); }}
   ul.legend li {{ padding:7px 0; border-bottom:1px solid {GRID}; }}
   ul.legend b {{ color:var(--accent); }}
+  .g-intro {{ font-size:13.5px; line-height:1.7; color:var(--text); margin:2px 4px 18px; }}
+  .g-sub {{ font-size:14px; margin:22px 4px 10px; color:var(--accent); }}
+  .g-warn {{ font-size:12.5px; line-height:1.6; color:{AMBER}; background:rgba(255,212,59,0.06);
+             border:1px solid rgba(255,212,59,0.2); border-radius:10px; padding:12px 16px; margin:18px 4px 4px; }}
+  table.guide {{ width:100%; border-collapse:collapse; font-size:13px; line-height:1.55; }}
+  table.guide th {{ color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase;
+                    text-align:left; padding:8px 12px; border-bottom:1px solid {GRID}; }}
+  table.guide td {{ padding:11px 12px; border-bottom:1px solid {GRID}; vertical-align:top; }}
+  table.guide td.g-name {{ font-weight:600; color:var(--text); white-space:nowrap; }}
+  table.guide td.g-act {{ color:var(--muted); }}
+  table.guide td.g-now {{ color:{GREEN}; font-weight:600; white-space:nowrap; }}
+  .dot {{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; }}
   footer {{ color:var(--muted); font-size:11px; text-align:center; margin-top:30px; padding:0 24px; line-height:1.6; }}
   @media (max-width:900px) {{ .cards{{grid-template-columns:repeat(2,1fr);}} .grid2{{grid-template-columns:1fr;}} }}
 </style></head>
@@ -358,6 +454,9 @@ TEMPLATE = """<!DOCTYPE html>
   <h2>Strategy Playbook</h2>
   <div class="panel" style="padding:14px 22px;">{legend}</div>
 
+  <h2>How to Read the Signals &amp; Investment Suggestions</h2>
+  <div class="panel" style="padding:16px 22px;">{guide}</div>
+
   <footer>
     sVIX is a research & education tool, <b>not investment advice</b>. Backtests use real ETF
     returns (incl. the Feb-2018 SVXY collapse and 2020 COVID crash) net of {cost_bps}bps/trade costs;
@@ -377,7 +476,7 @@ def build(results: dict[str, BacktestResult], sig: pd.DataFrame, md,
 
     html = TEMPLATE.format(
         BG=BG, PANEL=PANEL, TEXT=TEXT, MUTED=MUTED, ACCENT=ACCENT,
-        GRID=GRID, GREEN=GREEN, RED=RED,
+        GRID=GRID, GREEN=GREEN, RED=RED, AMBER=AMBER,
         period=f"{md.meta['start']} → {md.meta['end']}",
         n_obs=md.meta["n_obs"], source=md.source.upper(),
         generated=sig.index.max().strftime("%Y-%m-%d"),
@@ -393,6 +492,7 @@ def build(results: dict[str, BacktestResult], sig: pd.DataFrame, md,
         allocation=_fig_html(fig_allocation(flagship), "alloc"),
         table=_metrics_table(results),
         legend=_strategy_legend(all_strategies()),
+        guide=_signal_guide(snap),
     )
 
     out_path = out_path or os.path.join(
