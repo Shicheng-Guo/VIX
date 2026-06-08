@@ -227,17 +227,46 @@ def _kpi_cards(snap: dict, source: str) -> str:
     return html
 
 
-def _signal_call(snap: dict, flagship: BacktestResult) -> str:
-    """Plain-language 'what the model says to do right now'."""
-    w = flagship.weights.iloc[-1]
+def _signal_call(snap: dict, target: pd.DataFrame) -> str:
+    """The explicit BUY / SELL / HOLD signal — what the model says to do today.
+
+    `target` is the flagship strategy's full target-weight DataFrame. Today's
+    row is the desired position; the change vs yesterday is the actual trade.
+    """
+    today = target.iloc[-1]
+    prev = target.iloc[-2] if len(target) > 1 else today * 0
+
+    # ---- directional stance ----
+    svxy, vxx = float(today.get("SVXY", 0)), float(today.get("VXX", 0))
+    if svxy > 0:
+        action, acolor = "SELL VOLATILITY", GREEN
+        stance = f"Short vol — hold {svxy*100:.0f}% SVXY (harvest contango carry)"
+    elif vxx > 0:
+        action, acolor = "BUY VOLATILITY", RED
+        stance = f"Long vol — hold {vxx*100:.0f}% VXX (tail protection)"
+    else:
+        action, acolor = "STAY IN CASH", AMBER
+        stance = "Flat — no volatility exposure, preserve capital"
+
+    # ---- today's trade (change vs yesterday) ----
+    trades = []
+    for k in ["SVXY", "VXX", "SPX"]:
+        d = float(today.get(k, 0)) - float(prev.get(k, 0))
+        if abs(d) > 0.01:
+            verb = "BUY" if d > 0 else "SELL"
+            trades.append(f"{verb} {abs(d)*100:.0f}% {k}")
+    trade_txt = " · ".join(trades) if trades else "No change — HOLD current position"
+
+    # ---- allocation breakdown ----
     parts = []
     for k in ["SVXY", "VXX", "SPX"]:
-        if k in w and abs(w[k]) > 1e-6:
-            parts.append(f"{w[k]*100:.0f}% {k}")
-    cash = w.get("CASH", 0) * 100
+        if abs(float(today.get(k, 0))) > 1e-6:
+            parts.append(f"{float(today[k])*100:.0f}% {k}")
+    cash = float(today.get("CASH", 0)) * 100
     if cash > 1:
         parts.append(f"{cash:.0f}% cash")
     alloc = ", ".join(parts) if parts else "100% cash"
+
     regime = snap.get("regime", "NA")
     notes = {
         "CALM": "Steep contango — harvest short-vol carry at full size.",
@@ -247,8 +276,11 @@ def _signal_call(snap: dict, flagship: BacktestResult) -> str:
     }
     return f"""
     <div class="signal">
-      <div class="signal-title">📟 Flagship signal — {snap.get('date','')}</div>
-      <div class="signal-alloc">{alloc}</div>
+      <div class="signal-title">📟 Today's Signal — {snap.get('date','')} · regime {regime}</div>
+      <div class="signal-action" style="color:{acolor}">{action}</div>
+      <div class="signal-stance">{stance}</div>
+      <div class="signal-row"><span class="lbl">Trade today</span> {trade_txt}</div>
+      <div class="signal-row"><span class="lbl">Target book</span> {alloc}</div>
       <div class="signal-note">{notes.get(regime,'')}</div>
     </div>"""
 
@@ -392,8 +424,12 @@ TEMPLATE = """<!DOCTYPE html>
   .signal {{ background:linear-gradient(135deg,#161b26,#1b2233); border:1px solid {GRID};
              border-left:4px solid var(--accent); border-radius:12px; padding:16px 20px; margin:8px 0 24px; }}
   .signal-title {{ color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.6px; }}
-  .signal-alloc {{ font-size:22px; font-weight:700; margin:6px 0; }}
-  .signal-note {{ color:var(--muted); font-size:13px; }}
+  .signal-action {{ font-size:30px; font-weight:800; letter-spacing:.5px; margin:8px 0 2px; }}
+  .signal-stance {{ font-size:14px; color:var(--text); margin-bottom:10px; }}
+  .signal-row {{ font-size:13.5px; color:var(--text); margin:3px 0; }}
+  .signal-row .lbl {{ display:inline-block; min-width:96px; color:var(--muted);
+                      text-transform:uppercase; font-size:10.5px; letter-spacing:.5px; }}
+  .signal-note {{ color:var(--muted); font-size:13px; margin-top:8px; }}
   .grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; }}
   .panel {{ background:var(--panel); border:1px solid {GRID}; border-radius:12px; padding:6px; margin-bottom:18px; }}
   h2 {{ font-size:16px; margin:30px 0 12px; padding-left:10px; border-left:3px solid var(--accent); }}
@@ -471,8 +507,12 @@ def build(results: dict[str, BacktestResult], sig: pd.DataFrame, md,
           out_path: str | None = None) -> str:
     from .strategies import all_strategies
 
+    from .strategies import get as get_strategy
+
     snap = latest_snapshot(sig)
     flagship = results.get(flagship_key) or next(iter(results.values()))
+    # fresh target weights for today's explicit buy/sell call
+    flagship_target = get_strategy(flagship_key).weights(sig)
 
     html = TEMPLATE.format(
         BG=BG, PANEL=PANEL, TEXT=TEXT, MUTED=MUTED, ACCENT=ACCENT,
@@ -482,7 +522,7 @@ def build(results: dict[str, BacktestResult], sig: pd.DataFrame, md,
         generated=sig.index.max().strftime("%Y-%m-%d"),
         cost_bps=int(cost_bps),
         cards=_kpi_cards(snap, md.source),
-        signal=_signal_call(snap, flagship),
+        signal=_signal_call(snap, flagship_target),
         term=_fig_html(fig_term_structure(sig), "term"),
         ratio=_fig_html(fig_ratio(sig), "ratio"),
         vix_hist=_fig_html(fig_vix_history(sig), "vixhist"),
